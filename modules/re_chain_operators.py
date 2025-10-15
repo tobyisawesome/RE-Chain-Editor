@@ -13,6 +13,94 @@ from .re_chain_propertyGroups import getChainHeader,getWindSettings,getChainSett
 from .ui_re_chain_panels import tag_redraw
 from .blender_utils import showErrorMessageBox,outlinerShowObject
 from .re_chain_presets import saveAsPreset,readPresetJSON
+
+PHYSICS_EMPTY_PROP = "RE_CHAIN_PHYSICS_BONE"
+PHYSICS_ANCHOR_PROP = "RE_CHAIN_PHYSICS_ANCHOR"
+PHYSICS_CONSTRAINT_PROP = "RE_CHAIN_PHYSICS_CONSTRAINT"
+PHYSICS_DRIVER_PROP = "RE_CHAIN_PHYSICS_DRIVER"
+PHYSICS_BONE_PROP = "re_chain_physics_empty"
+PHYSICS_CONSTRAINT_NAME = "RE_CHAIN_PHYSICS"
+
+
+def _get_chain_node_map(chain_collection):
+        node_map = {}
+        if chain_collection is None:
+                return node_map
+        for obj in chain_collection.all_objects:
+                if obj.get("TYPE") == "RE_CHAIN_NODE":
+                        constraint = obj.constraints.get("BoneName")
+                        if constraint and constraint.subtarget:
+                                node_map[constraint.subtarget] = obj
+        return node_map
+
+
+def _ensure_preview_collection(scene, chain_collection=None):
+        base_name = "RE Chain Physics Preview"
+        if chain_collection:
+                base_name = f"{chain_collection.name} Physics Preview"
+        collection = bpy.data.collections.get(base_name)
+        if collection is None:
+                collection = bpy.data.collections.new(base_name)
+                scene.collection.children.link(collection)
+        return collection
+
+
+def _bone_depth(pose_bone):
+        depth = 0
+        parent = pose_bone.parent
+        while parent is not None:
+                depth += 1
+                parent = parent.parent
+        return depth
+
+
+def _remove_bone_constraints(armature_obj, bone_names=None):
+        if armature_obj is None or armature_obj.type != "ARMATURE":
+                return
+        pose_bones = armature_obj.pose.bones
+        target_names = None
+        if bone_names is not None:
+                target_names = set(bone_names)
+        for pose_bone in pose_bones:
+                if target_names and pose_bone.name not in target_names:
+                        continue
+                for constraint in list(pose_bone.constraints):
+                        if constraint.name == PHYSICS_CONSTRAINT_NAME:
+                                pose_bone.constraints.remove(constraint)
+                if PHYSICS_BONE_PROP in pose_bone:
+                        if target_names is None or pose_bone.name in target_names:
+                                del pose_bone[PHYSICS_BONE_PROP]
+
+
+def _remove_preview_objects(scene, bone_names=None):
+        target_names = None
+        if bone_names is not None:
+                target_names = set(bone_names)
+
+        def should_remove(name):
+                if target_names is None:
+                        return True
+                return name in target_names
+
+        for obj in list(bpy.data.objects):
+                bone_name = obj.get(PHYSICS_EMPTY_PROP)
+                if bone_name and should_remove(bone_name):
+                        bpy.data.objects.remove(obj, do_unlink=True)
+        for obj in list(bpy.data.objects):
+                anchor_name = obj.get(PHYSICS_ANCHOR_PROP)
+                if anchor_name and should_remove(anchor_name):
+                        bpy.data.objects.remove(obj, do_unlink=True)
+        for obj in list(bpy.data.objects):
+                constraint_link = obj.get(PHYSICS_CONSTRAINT_PROP)
+                if constraint_link:
+                        parent_name, child_name = constraint_link.split("|", 1)
+                        if should_remove(parent_name) or should_remove(child_name):
+                                bpy.data.objects.remove(obj, do_unlink=True)
+
+
+def _clear_physics_preview(scene, armature_obj, bone_names=None):
+        _remove_bone_constraints(armature_obj, bone_names)
+        _remove_preview_objects(scene, bone_names)
 from .re_chain_geoNodes import getColCapsuleGeoNodeTree,getColSphereGeoNodeTree,getChainLinkGeoNodeTree,getConeGeoNodeTree,getLinkColGeoNodeTree,getChainGroupMat
 
 
@@ -760,12 +848,288 @@ class WM_OT_CreateChainLinkCollision(Operator):
 	def poll(self,context):
 		return context.active_object != None and context.active_object.get("TYPE") == "RE_CHAIN_LINK"
 
+
+class WM_OT_CreatePhysicsPreview(Operator):
+        bl_label = "Create Physics Preview"
+        bl_idname = "re_chain.create_physics_preview"
+        bl_options = {'UNDO'}
+        bl_description = "Generate rigid body driven helpers so selected chain bones can be previewed with Blender's physics and later baked"
+
+        def execute(self, context):
+                scene = context.scene
+                armature_obj = context.object if context.object and context.object.type == "ARMATURE" else None
+                if armature_obj is None or context.mode != "POSE":
+                        showErrorMessageBox("Switch to Pose Mode on an armature before creating a physics preview.")
+                        return {'CANCELLED'}
+
+                chain_collection = scene.re_chain_toolpanel.chainCollection
+                if chain_collection is None:
+                        showErrorMessageBox("Assign an active chain collection before creating a physics preview.")
+                        return {'CANCELLED'}
+
+                node_map = _get_chain_node_map(chain_collection)
+                if not node_map:
+                        showErrorMessageBox("No chain nodes were found for the active chain collection.")
+                        return {'CANCELLED'}
+
+                pose_bones = list(context.selected_pose_bones or [])
+                if not pose_bones and context.active_pose_bone:
+                        pose_bones = [context.active_pose_bone]
+                if not pose_bones:
+                        showErrorMessageBox("Select at least one pose bone that is part of the active chain.")
+                        return {'CANCELLED'}
+
+                valid_bones = [pb for pb in pose_bones if pb.name in node_map]
+                skipped = [pb.name for pb in pose_bones if pb.name not in node_map]
+                if not valid_bones:
+                        showErrorMessageBox("None of the selected bones belong to the active chain collection.")
+                        return {'CANCELLED'}
+                if skipped:
+                        self.report({'WARNING'}, "Skipped bones with no chain node: " + ", ".join(skipped))
+
+                selected_bone_names = [pb.name for pb in armature_obj.pose.bones if pb.bone.select]
+                active_bone_name = context.active_pose_bone.name if context.active_pose_bone else None
+
+                matrix_cache = {}
+                for pose_bone in armature_obj.pose.bones:
+                        if pose_bone.name in node_map:
+                                matrix_cache[pose_bone.name] = pose_bone.matrix.copy()
+
+                target_names = {pb.name for pb in valid_bones}
+
+                _clear_physics_preview(scene, armature_obj, bone_names=target_names)
+
+                original_mode = armature_obj.mode
+                bpy.ops.object.mode_set(mode='OBJECT')
+
+                if scene.rigidbody_world is None:
+                        bpy.ops.rigidbody.world_add()
+
+                preview_collection = _ensure_preview_collection(scene, chain_collection)
+                view_layer = context.view_layer
+                prev_active_object = view_layer.objects.active
+                prev_selected_objects = list(context.selected_objects)
+
+                tool_props = scene.re_chain_toolpanel
+                mass = tool_props.physics_preview_mass
+                stiffness = tool_props.physics_preview_stiffness
+                damping = tool_props.physics_preview_damping
+                linear_damping = tool_props.physics_preview_linear_damping
+                angular_damping = tool_props.physics_preview_angular_damping
+                margin = tool_props.physics_preview_collision_margin
+
+                created = {}
+                bone_to_empty = {}
+
+                def ensure_preview(pose_bone):
+                        if pose_bone.name in created:
+                                return created[pose_bone.name]
+                        node_obj = node_map.get(pose_bone.name)
+                        if node_obj is None:
+                                return None
+
+                        parent_empty = None
+                        parent_identifier = None
+                        if pose_bone.parent and pose_bone.parent.name in node_map:
+                                parent_empty = ensure_preview(armature_obj.pose.bones[pose_bone.parent.name])
+                                parent_identifier = pose_bone.parent.name
+
+                        matrix_world = armature_obj.matrix_world @ matrix_cache.get(pose_bone.name, pose_bone.matrix)
+
+                        empty = bpy.data.objects.new(f"REChainPhysics_{pose_bone.name}", None)
+                        preview_collection.objects.link(empty)
+                        empty.empty_display_type = 'SPHERE'
+                        radius = getattr(node_obj.re_chain_chainnode, "collisionRadius", 0.0)
+                        if radius <= 0.0:
+                                radius = max(getattr(node_obj, "empty_display_size", 0.02), 0.02)
+                        empty.empty_display_size = radius
+                        empty.matrix_world = matrix_world
+                        empty.rotation_mode = 'QUATERNION'
+                        empty[PHYSICS_EMPTY_PROP] = pose_bone.name
+
+                        bpy.ops.object.select_all(action='DESELECT')
+                        empty.select_set(True)
+                        view_layer.objects.active = empty
+                        bpy.ops.rigidbody.object_add(type='ACTIVE')
+                        empty.select_set(False)
+
+                        rb = empty.rigid_body
+                        rb.mass = mass
+                        rb.linear_damping = linear_damping
+                        rb.angular_damping = angular_damping
+                        rb.use_margin = True
+                        rb.collision_margin = margin
+                        rb.collision_shape = 'SPHERE'
+                        rb.use_deactivation = False
+                        rb.use_start_deactivated = False
+
+                        simulate_bone = pose_bone.name in target_names
+                        rb.kinematic = not simulate_bone
+                        if not simulate_bone:
+                                constraint = empty.constraints.new('COPY_TRANSFORMS')
+                                constraint.target = armature_obj
+                                constraint.subtarget = pose_bone.name
+                                constraint.name = 'RE_CHAIN_DRIVER'
+                                empty[PHYSICS_DRIVER_PROP] = pose_bone.name
+                        else:
+                                bone_to_empty[pose_bone.name] = empty.name
+
+                        created[pose_bone.name] = empty
+
+                        parent_obj = parent_empty
+                        if parent_obj is None:
+                                anchor = bpy.data.objects.new(f"REChainPhysicsAnchor_{pose_bone.name}", None)
+                                preview_collection.objects.link(anchor)
+                                anchor.empty_display_type = 'PLAIN_AXES'
+                                anchor.empty_display_size = radius * 0.5
+                                anchor.matrix_world = matrix_world
+                                anchor.rotation_mode = 'QUATERNION'
+                                anchor[PHYSICS_ANCHOR_PROP] = pose_bone.name
+                                bpy.ops.object.select_all(action='DESELECT')
+                                anchor.select_set(True)
+                                view_layer.objects.active = anchor
+                                bpy.ops.rigidbody.object_add(type='PASSIVE')
+                                anchor.select_set(False)
+                                anchor_rb = anchor.rigid_body
+                                anchor_rb.use_margin = True
+                                anchor_rb.collision_margin = margin
+                                anchor_rb.collision_shape = 'SPHERE'
+                                anchor_rb.kinematic = True
+                                if pose_bone.parent:
+                                        constraint = anchor.constraints.new('COPY_TRANSFORMS')
+                                        constraint.target = armature_obj
+                                        constraint.subtarget = pose_bone.parent.name
+                                parent_obj = anchor
+                                parent_identifier = pose_bone.parent.name if pose_bone.parent else pose_bone.name
+
+                        constraint_obj = bpy.data.objects.new(f"REChainPhysicsConstraint_{pose_bone.name}", None)
+                        preview_collection.objects.link(constraint_obj)
+                        constraint_obj.empty_display_type = 'PLAIN_AXES'
+                        constraint_obj.empty_display_size = radius * 0.25
+                        constraint_obj.location = (parent_obj.matrix_world.translation + empty.matrix_world.translation) * 0.5
+                        link_identifier = parent_identifier if parent_identifier else pose_bone.name
+                        constraint_obj[PHYSICS_CONSTRAINT_PROP] = f"{link_identifier}|{pose_bone.name}"
+                        bpy.ops.object.select_all(action='DESELECT')
+                        constraint_obj.select_set(True)
+                        view_layer.objects.active = constraint_obj
+                        bpy.ops.rigidbody.constraint_add(type='GENERIC_SPRING')
+                        constraint_obj.select_set(False)
+                        rb_constraint = constraint_obj.rigid_body_constraint
+                        rb_constraint.object1 = parent_obj
+                        rb_constraint.object2 = empty
+                        for axis in ('x', 'y', 'z'):
+                                setattr(rb_constraint, f'use_limit_lin_{axis}', True)
+                                setattr(rb_constraint, f'limit_lin_{axis}_lower', 0.0)
+                                setattr(rb_constraint, f'limit_lin_{axis}_upper', 0.0)
+                                setattr(rb_constraint, f'use_spring_ang_{axis}', True)
+                                setattr(rb_constraint, f'spring_stiffness_ang_{axis}', stiffness)
+                                setattr(rb_constraint, f'spring_damping_ang_{axis}', damping)
+
+                        return empty
+
+                for pose_bone in sorted(valid_bones, key=_bone_depth):
+                        ensure_preview(pose_bone)
+
+                bpy.ops.object.select_all(action='DESELECT')
+                for obj in prev_selected_objects:
+                        if obj and obj.name in bpy.data.objects:
+                                obj.select_set(True)
+                if prev_active_object and prev_active_object.name in bpy.data.objects:
+                        view_layer.objects.active = prev_active_object
+
+                bpy.ops.object.mode_set(mode='POSE')
+
+                for bone_name, empty_name in bone_to_empty.items():
+                        pose_bone = armature_obj.pose.bones.get(bone_name)
+                        empty_obj = bpy.data.objects.get(empty_name)
+                        if pose_bone and empty_obj:
+                                for constraint in list(pose_bone.constraints):
+                                        if constraint.name == PHYSICS_CONSTRAINT_NAME:
+                                                pose_bone.constraints.remove(constraint)
+                                constraint = pose_bone.constraints.new('COPY_TRANSFORMS')
+                                constraint.name = PHYSICS_CONSTRAINT_NAME
+                                constraint.target = empty_obj
+                                pose_bone[PHYSICS_BONE_PROP] = empty_obj.name
+
+                for bone in armature_obj.data.bones:
+                        bone.select = bone.name in selected_bone_names
+                if active_bone_name and active_bone_name in armature_obj.data.bones:
+                        armature_obj.data.bones.active = armature_obj.data.bones[active_bone_name]
+
+                if original_mode != 'POSE':
+                        bpy.ops.object.mode_set(mode=original_mode)
+
+                self.report({'INFO'}, f"Created physics preview for {len(bone_to_empty)} bone(s).")
+                return {'FINISHED'}
+
+
+class WM_OT_ClearPhysicsPreview(Operator):
+        bl_label = "Clear Physics Preview"
+        bl_idname = "re_chain.clear_physics_preview"
+        bl_description = "Remove generated physics preview helpers from the current armature"
+
+        def execute(self, context):
+                scene = context.scene
+                armature_obj = context.object if context.object and context.object.type == "ARMATURE" else None
+                if armature_obj is None:
+                        showErrorMessageBox("Select an armature before clearing physics previews.")
+                        return {'CANCELLED'}
+
+                bone_names = None
+                if context.mode == 'POSE':
+                        selected_preview = [pb.name for pb in context.selected_pose_bones if PHYSICS_BONE_PROP in pb]
+                        if selected_preview:
+                                bone_names = selected_preview
+
+                _clear_physics_preview(scene, armature_obj, bone_names=bone_names)
+
+                if bone_names:
+                        self.report({'INFO'}, f"Removed physics preview from {len(bone_names)} bone(s).")
+                else:
+                        self.report({'INFO'}, "Removed all physics preview helpers.")
+                return {'FINISHED'}
+
+
+class WM_OT_BakePhysicsPreview(Operator):
+        bl_label = "Bake Physics Preview"
+        bl_idname = "re_chain.bake_physics_preview"
+        bl_description = "Bake the simulated physics preview results to keyframes for the selected bones"
+
+        def execute(self, context):
+                if context.mode != 'POSE':
+                        showErrorMessageBox("Switch to Pose Mode and select the bones you want to bake.")
+                        return {'CANCELLED'}
+
+                armature_obj = context.object if context.object and context.object.type == "ARMATURE" else None
+                if armature_obj is None:
+                        showErrorMessageBox("Select an armature before baking physics previews.")
+                        return {'CANCELLED'}
+
+                preview_bones = [pb for pb in context.selected_pose_bones if PHYSICS_BONE_PROP in pb]
+                if not preview_bones:
+                        showErrorMessageBox("Select pose bones that have a physics preview before baking.")
+                        return {'CANCELLED'}
+
+                frame_start = context.scene.frame_start
+                frame_end = context.scene.frame_end
+                bpy.ops.nla.bake(frame_start=frame_start,
+                                  frame_end=frame_end,
+                                  only_selected=True,
+                                  visual_keying=True,
+                                  use_current_action=True,
+                                  bake_types={'POSE'})
+
+                _clear_physics_preview(context.scene, armature_obj, bone_names=[pb.name for pb in preview_bones])
+                self.report({'INFO'}, f"Baked physics preview for {len(preview_bones)} bone(s).")
+                return {'FINISHED'}
+
+
 class WM_OT_CopyChainProperties(Operator):
 	bl_label = "Copy"
 	bl_idname = "re_chain.copy_chain_properties"
 	bl_context = "objectmode"
 	bl_description = "Copy properties from a chain object"
-	
+
 	@classmethod
 	def poll(cls, context):
 		return bpy.context.selected_objects != []
