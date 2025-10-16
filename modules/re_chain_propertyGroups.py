@@ -481,6 +481,54 @@ class chainToolPanelPropertyGroup(bpy.types.PropertyGroup):
 		default = "Create Chain From Bone",
 		
 		)
+	physics_preview_mass: FloatProperty(
+		name = "Mass",
+		description = "Mass used for simulated physics preview bones",
+		default = 0.05,
+		min = 0.0,
+		soft_max = 1.0,
+		precision = 3
+		)
+	physics_preview_stiffness: FloatProperty(
+		name = "Stiffness",
+		description = "Angular spring stiffness applied to generated rigid body constraints",
+		default = 25.0,
+		min = 0.0,
+		soft_max = 200.0,
+		precision = 2
+		)
+	physics_preview_damping: FloatProperty(
+		name = "Damping",
+		description = "Angular damping applied to generated rigid body constraints",
+		default = 0.65,
+		min = 0.0,
+		soft_max = 10.0,
+		precision = 2
+		)
+	physics_preview_linear_damping: FloatProperty(
+		name = "Linear Damp",
+		description = "Linear damping applied to simulated physics empties",
+		default = 0.35,
+		min = 0.0,
+		max = 1.0,
+		precision = 2
+		)
+	physics_preview_angular_damping: FloatProperty(
+		name = "Angular Damp",
+		description = "Angular damping applied to simulated physics empties",
+		default = 0.5,
+		min = 0.0,
+		max = 1.0,
+		precision = 2
+		)
+	physics_preview_collision_margin: FloatProperty(
+		name = "Margin",
+		description = "Collision margin for generated rigid bodies",
+		default = 0.003,
+		min = 0.0,
+		soft_max = 0.05,
+		precision = 4
+		)
 	"""
 	chainCollection: bpy.props.StringProperty(
 		name="",

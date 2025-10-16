@@ -175,11 +175,25 @@ class OBJECT_PT_ChainUtilsPanel(Panel):
 		layout.operator("re_chain.align_frames")
 		layout.operator("re_chain.point_frame")
 		layout.label(text="Pose Mode Tools")
-		layout.operator("re_chain.chain_from_bone")
-		layout.label(text="Collision Shape")
-		layout.prop(re_chain_toolpanel, "collisionShape")
-		layout.operator("re_chain.collision_from_bone")
-		
+                layout.operator("re_chain.chain_from_bone")
+                layout.label(text="Collision Shape")
+                layout.prop(re_chain_toolpanel, "collisionShape")
+                layout.operator("re_chain.collision_from_bone")
+                layout.separator()
+                layout.label(text="Physics Preview")
+                col = layout.column(align=True)
+                col.prop(re_chain_toolpanel, "physics_preview_mass")
+                col.prop(re_chain_toolpanel, "physics_preview_stiffness")
+                col.prop(re_chain_toolpanel, "physics_preview_damping")
+                col.prop(re_chain_toolpanel, "physics_preview_linear_damping")
+                col.prop(re_chain_toolpanel, "physics_preview_angular_damping")
+                col.prop(re_chain_toolpanel, "physics_preview_collision_margin")
+                row = layout.row(align=True)
+                row.operator("re_chain.create_physics_preview")
+                row.operator("re_chain.clear_physics_preview")
+                layout.operator("re_chain.bake_physics_preview")
+                layout.operator("re_chain.physics_preview_help", icon='QUESTION')
+
 """
 class OBJECT_PT_ChainHeaderPanel(Panel):
 	bl_label = "RE Chain Header Settings"
