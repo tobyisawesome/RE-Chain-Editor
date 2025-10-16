@@ -573,6 +573,13 @@ class chainToolPanelPropertyGroup(bpy.types.PropertyGroup):
 		default = True,
 		update = update_hideLastNodeAngleLimit,
 	)
+
+chainToolPanelPropertyGroup.physicsPreviewEnabled = BoolProperty(
+	name="Physics Preview Enabled",
+	description="Stores whether Blender physics preview constraints are currently active for the active chain",
+	default = False
+)
+
 class chainHeaderPropertyGroup(bpy.types.PropertyGroup):
 
 	'''version: IntProperty(

@@ -47,6 +47,16 @@ class OBJECT_PT_ChainObjectModePanel(Panel):
 		#layout.operator("re_chain.align_chains_to_bone")# Not needed anymore
 		layout.operator("re_chain.align_frames")
 		layout.operator("re_chain.apply_angle_limit_ramp")
+		layout.separator()
+		layout.label(text="Physics Preview")
+		layout.operator("re_chain.create_physics_bones")
+		row = layout.row(align=True)
+		row.operator("re_chain.enable_physics_preview")
+		row.operator("re_chain.disable_physics_preview")
+		layout.operator("re_chain.bake_physics_preview")
+		status_row = layout.row()
+		status_row.enabled = False
+		status_row.prop(re_chain_toolpanel, "physicsPreviewEnabled")
 		layout.label(text="Create new chains in Pose Mode.")
 		layout.operator("re_chain.switch_to_pose")
 		#Not implemented yet
@@ -108,6 +118,16 @@ class OBJECT_PT_ChainPoseModePanel(Panel):
 		layout.operator("re_chain.create_chain_bone_group")
 		layout.operator("re_chain.align_bone_tails_to_axis")
 		layout.prop(re_chain_toolpanel, "experimentalPoseModeOptions")
+		layout.separator()
+		layout.label(text="Physics Preview")
+		layout.operator("re_chain.create_physics_bones")
+		row = layout.row(align=True)
+		row.operator("re_chain.enable_physics_preview")
+		row.operator("re_chain.disable_physics_preview")
+		layout.operator("re_chain.bake_physics_preview")
+		status_row = layout.row()
+		status_row.enabled = False
+		status_row.prop(re_chain_toolpanel, "physicsPreviewEnabled")
 		layout.label(text="Configure chains in Object Mode.")
 		layout.operator("re_chain.switch_to_object")
 
